@@ -2,6 +2,7 @@ import os
 import hashlib
 import mysql.connector
 from cryptography.fernet import Fernet
+import getpass
 
 # -----------------------------
 # FILES
@@ -15,8 +16,8 @@ KEY_FILE = "vault.key"
 def connect_db():
     return mysql.connector.connect(
         host="localhost",
-        user="root",        # change if needed
-        password="root",    # change if needed
+        user="pm_user",        
+        password="pm_password",    
         database="password_manager"
     )
 
@@ -31,12 +32,12 @@ def hash_master_password(password):
 # -----------------------------
 def authenticate_user():
     if not os.path.exists(MASTER_FILE):
-        pwd = input("Create master password: ")
+        pwd = getpass.getpass("Create master password: ")
         with open(MASTER_FILE, "w") as f:
             f.write(hash_master_password(pwd))
         print("Master password created.\n")
     else:
-        pwd = input("Enter master password: ")
+        pwd = getpass.getpass("Create master password: ")
         with open(MASTER_FILE, "r") as f:
             stored = f.read()
         if hash_master_password(pwd) != stored:
