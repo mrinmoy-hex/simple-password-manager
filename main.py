@@ -1,175 +1,169 @@
 import os
-import base64
 import hashlib
+import mysql.connector
 from cryptography.fernet import Fernet
 
+# -----------------------------
+# FILES
+# -----------------------------
 MASTER_FILE = "master.key"
-VAULT_KEY_FILE = "vault.key"
-PASSWORD_FILE = "passwords.txt"
+KEY_FILE = "vault.key"
 
+# -----------------------------
+# MYSQL CONNECTION
+# -----------------------------
+def connect_db():
+    return mysql.connector.connect(
+        host="localhost",
+        user="root",        # change if needed
+        password="root",    # change if needed
+        database="password_manager"
+    )
 
-# ----------------------------------------------------
-# 1. HASHING MASTER PASSWORD
-# ----------------------------------------------------
-def hash_master_password(password: str) -> str:
+# -----------------------------
+# HASH MASTER PASSWORD
+# -----------------------------
+def hash_master_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-
-# ----------------------------------------------------
-# 2. SETUP / VERIFY MASTER PASSWORD
-# ----------------------------------------------------
-def setup_master_password():
+# -----------------------------
+# AUTHENTICATION
+# -----------------------------
+def authenticate_user():
     if not os.path.exists(MASTER_FILE):
-        print("No master password found. Let's create one.")
         pwd = input("Create master password: ")
-        hashed = hash_master_password(pwd)
-
         with open(MASTER_FILE, "w") as f:
-            f.write(hashed)
-
-        print("Master password created successfully.\n")
+            f.write(hash_master_password(pwd))
+        print("Master password created.\n")
     else:
         pwd = input("Enter master password: ")
-        hashed = hash_master_password(pwd)
-
         with open(MASTER_FILE, "r") as f:
-            stored = f.read().strip()
-
-        if hashed != stored:
-            print("Incorrect master password. Access denied.")
+            stored = f.read()
+        if hash_master_password(pwd) != stored:
+            print("Access denied.")
             exit()
-        else:
-            print("Access granted.\n")
+        print("Access granted.\n")
 
-
-# ----------------------------------------------------
-# 3. ENCRYPTION / DECRYPTION KEY MANAGEMENT
-# ----------------------------------------------------
-def load_vault_key():
-    if not os.path.exists(VAULT_KEY_FILE):
+# -----------------------------
+# LOAD ENCRYPTION KEY
+# -----------------------------
+def load_vault():
+    if not os.path.exists(KEY_FILE):
         key = Fernet.generate_key()
-        with open(VAULT_KEY_FILE, "wb") as f:
+        with open(KEY_FILE, "wb") as f:
             f.write(key)
     else:
-        with open(VAULT_KEY_FILE, "rb") as f:
+        with open(KEY_FILE, "rb") as f:
             key = f.read()
-
     return Fernet(key)
 
+# -----------------------------
+# ADD PASSWORD
+# -----------------------------
+def add_password(db, vault):
+    site = input("Website/App: ")
+    user = input("Username/Email: ")
+    pwd = input("Password: ")
 
-# ----------------------------------------------------
-# 4. ADDING A PASSWORD ENTRY
-# ----------------------------------------------------
-def add_password(fernet):
-    website = input("Website/Platform: ")
-    username = input("Username/Email: ")
-    password = input("Password: ")
+    cursor = db.cursor()
+    sql = "INSERT INTO passwords (website, username, password) VALUES (%s, %s, %s)"
+    values = (
+        vault.encrypt(site.encode()).decode(),
+        vault.encrypt(user.encode()).decode(),
+        vault.encrypt(pwd.encode()).decode()
+    )
+    cursor.execute(sql, values)
+    db.commit()
+    print("Password stored successfully.\n")
 
-    encrypted_site = fernet.encrypt(website.encode()).decode()
-    encrypted_user = fernet.encrypt(username.encode()).decode()
-    encrypted_pass = fernet.encrypt(password.encode()).decode()
+# -----------------------------
+# VIEW PASSWORDS
+# -----------------------------
+def view_passwords(db, vault):
+    cursor = db.cursor()
+    cursor.execute("SELECT * FROM passwords")
+    rows = cursor.fetchall()
 
-    with open(PASSWORD_FILE, "a") as f:
-        f.write(f"{encrypted_site}|{encrypted_user}|{encrypted_pass}\n")
-
-    print("Password saved successfully.\n")
-
-
-# ----------------------------------------------------
-# 5. VIEW ALL PASSWORDS
-# ----------------------------------------------------
-def view_passwords(fernet):
-    if not os.path.exists(PASSWORD_FILE):
-        print("No passwords stored yet.\n")
+    if not rows:
+        print("No passwords stored.\n")
         return
 
-    with open(PASSWORD_FILE, "r") as f:
-        lines = f.readlines()
-
-    if not lines:
-        print("No passwords found.\n")
-        return
-
-    print("\nSaved Passwords:")
+    print("\nSaved Passwords")
     print("----------------")
+    for row in rows:
+        print(f"[{row[0]}] Website : {vault.decrypt(row[1].encode()).decode()}")
+        print(f"     Username: {vault.decrypt(row[2].encode()).decode()}")
+        print(f"     Password: {vault.decrypt(row[3].encode()).decode()}\n")
 
-    for i, line in enumerate(lines):
-        try:
-            site, user, pwd = line.strip().split("|")
-            site = fernet.decrypt(site.encode()).decode()
-            user = fernet.decrypt(user.encode()).decode()
-            pwd = fernet.decrypt(pwd.encode()).decode()
+# -----------------------------
+# UPDATE PASSWORD
+# -----------------------------
+def update_password(db, vault):
+    view_passwords(db, vault)
+    pid = input("Enter ID to update: ")
 
-            print(f"[{i}] Website: {site}")
-            print(f"     Username: {user}")
-            print(f"     Password: {pwd}\n")
-        except:
-            print(f"[{i}] (Error decrypting entry)\n")
+    site = input("New Website/App: ")
+    user = input("New Username: ")
+    pwd = input("New Password: ")
 
+    cursor = db.cursor()
+    sql = """
+        UPDATE passwords
+        SET website=%s, username=%s, password=%s
+        WHERE id=%s
+    """
+    values = (
+        vault.encrypt(site.encode()).decode(),
+        vault.encrypt(user.encode()).decode(),
+        vault.encrypt(pwd.encode()).decode(),
+        pid
+    )
+    cursor.execute(sql, values)
+    db.commit()
+    print("Password updated.\n")
 
-# ----------------------------------------------------
-# 6. DELETE PASSWORD ENTRY
-# ----------------------------------------------------
-def delete_password(fernet):
-    if not os.path.exists(PASSWORD_FILE):
-        print("No passwords to delete.\n")
-        return
+# -----------------------------
+# DELETE PASSWORD
+# -----------------------------
+def delete_password(db):
+    pid = input("Enter ID to delete: ")
+    cursor = db.cursor()
+    cursor.execute("DELETE FROM passwords WHERE id=%s", (pid,))
+    db.commit()
+    print("Password deleted.\n")
 
-    with open(PASSWORD_FILE, "r") as f:
-        lines = f.readlines()
-
-    if not lines:
-        print("There are no saved entries.\n")
-        return
-
-    print("Choose the entry number to delete:\n")
-    view_passwords(fernet)
-
-    try:
-        idx = int(input("Enter index: "))
-        if idx < 0 or idx >= len(lines):
-            print("Invalid index.\n")
-            return
-    except ValueError:
-        print("Invalid input.\n")
-        return
-
-    del lines[idx]
-
-    with open(PASSWORD_FILE, "w") as f:
-        f.writelines(lines)
-
-    print("Entry deleted successfully.\n")
-
-
-# ----------------------------------------------------
-# 7. MAIN PROGRAM LOOP
-# ----------------------------------------------------
+# -----------------------------
+# MAIN PROGRAM
+# -----------------------------
 def main():
-    setup_master_password()
-    f = load_vault_key()
+    authenticate_user()
+    vault = load_vault()
+    db = connect_db()
 
     while True:
-        print("Password Manager Menu:")
+        print("Password Manager")
         print("1. Add Password")
         print("2. View Passwords")
-        print("3. Delete Password")
-        print("4. Exit")
+        print("3. Update Password")
+        print("4. Delete Password")
+        print("5. Exit")
 
-        choice = input("Choose an option: ")
+        choice = input("Choose option: ")
 
         if choice == "1":
-            add_password(f)
+            add_password(db, vault)
         elif choice == "2":
-            view_passwords(f)
+            view_passwords(db, vault)
         elif choice == "3":
-            delete_password(f)
+            update_password(db, vault)
         elif choice == "4":
-            print("Exiting...")
+            delete_password(db)
+        elif choice == "5":
+            db.close()
+            print("Program terminated.")
             break
         else:
-            print("Invalid choice. Try again.\n")
-
+            print("Invalid choice.\n")
 
 if __name__ == "__main__":
     main()
